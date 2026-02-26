@@ -20,9 +20,10 @@ static const char* kVertSrc = R"glsl(
 out vec2 vUV;
 void main()
 {
-    // Full-screen triangle trick
-    vec2 pos = vec2((gl_VertexID & 1) * 2.0 - 1.0,
-                    (gl_VertexID & 2) * 1.0 - 1.0);
+    // Full-screen triangle trick that covers entire screen
+    // Triangle vertices: (-1,-1), (3,-1), (-1,3) to cover NDC cube
+    vec2 pos = vec2((gl_VertexID & 1) != 0 ? 3.0 : -1.0,
+                    (gl_VertexID & 2) != 0 ? 3.0 : -1.0);
     vUV = pos * 0.5 + 0.5;
     gl_Position = vec4(pos, 0.0, 1.0);
 }
@@ -171,6 +172,14 @@ void Renderer::resetAccumulation()
 void Renderer::setSamplesPerPixel(int spp)  { m_spp = spp; }
 void Renderer::setMaxBounces(int bounces)   { m_maxBounces = bounces; }
 void Renderer::setExposure(float exposure)  { m_exposure = exposure; }
+void Renderer::setDebugDirectional(bool enabled)
+{
+    m_optix->setDebugDirectional(enabled);
+}
+void Renderer::setDebugMode(int mode)
+{
+    m_optix->setDebugMode(mode);
+}
 void Renderer::setScene(const Scene* scene) { m_optix->setScene(scene); }
 
 uint32_t Renderer::accumulatedSamples() const

@@ -35,6 +35,8 @@ public:
     void setSamplesPerPixel(int spp);
     void setMaxBounces     (int bounces);
     void setExposure       (float exposure);
+    void setDebugDirectional(bool enabled);
+    void setDebugMode      (int mode);
     void setScene          (const Scene* scene);
 
     /** Number of accumulated samples in the current frame. */

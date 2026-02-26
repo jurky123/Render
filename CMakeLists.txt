@@ -4,6 +4,17 @@ project(PathTracer LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Force Visual Studio toolchain on Windows to avoid MSYS64 interference
+if(WIN32 AND NOT CMAKE_C_COMPILER_FORCED)
+    # Only set this once to avoid repeated forced changes
+    set(CMAKE_C_COMPILER_FORCED TRUE CACHE BOOL "")
+    # Let CMake auto-detect MSVC, but ensure it doesn't use MSYS64
+    if(NOT DEFINED CMAKE_C_COMPILER)
+        # Force MSVC compiler identification
+        set(CMAKE_C_COMPILER_ID "MSVC")
+    endif()
+endif()
+
 # -------------------------------------------------------------------
 # Options
 # -------------------------------------------------------------------
@@ -31,7 +42,10 @@ if(PATHTRACER_ENABLE_OPTIX)
         NAMES optix.h
         PATHS
             $ENV{OPTIX_ROOT}/include
+            $ENV{OPTIX8_PATH}/include
             $ENV{OPTIX7_PATH}/include
+            "C:/ProgramData/NVIDIA Corporation/OptiX SDK 8.1.0/include"
+            "C:/ProgramData/NVIDIA Corporation/OptiX SDK 7.7.0/include"
             /usr/local/optix/include
             /opt/optix/include
         NO_DEFAULT_PATH
@@ -136,6 +150,29 @@ target_include_directories(imgui PUBLIC
 target_link_libraries(imgui PUBLIC glfw OpenGL::GL)
 
 # -------------------------------------------------------------------
+# yaml-cpp (always fetch from source for consistency)
+# -------------------------------------------------------------------
+message(STATUS "Fetching yaml-cpp from source...")
+FetchContent_Declare(
+    yaml-cpp
+    GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
+    GIT_TAG yaml-cpp-0.7.0
+    GIT_SHALLOW TRUE
+)
+set(YAML_CPP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(YAML_CPP_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+set(YAML_CPP_BUILD_CONTRIB OFF CACHE BOOL "" FORCE)
+set(YAML_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(yaml-cpp)
+message(STATUS "yaml-cpp fetched successfully")
+
+# -------------------------------------------------------------------
+# OpenEXR (for EXR environment map support)
+# -------------------------------------------------------------------
+find_package(OpenEXR CONFIG REQUIRED)
+message(STATUS "Found OpenEXR version ${OpenEXR_VERSION}")
+
+# -------------------------------------------------------------------
 # Assimp
 # -------------------------------------------------------------------
 find_package(assimp QUIET)
@@ -143,15 +180,23 @@ if(NOT assimp_FOUND)
     message(STATUS "System Assimp not found – fetching from source.")
     FetchContent_Declare(
         assimp
-        GIT_REPOSITORY https://github.com/assimp/assimp.git
-        GIT_TAG        v5.3.1
-        GIT_SHALLOW    TRUE
+        URL https://github.com/assimp/assimp/archive/refs/tags/v5.3.1.zip
     )
     set(ASSIMP_BUILD_TESTS        OFF CACHE BOOL "" FORCE)
     set(ASSIMP_BUILD_ASSIMP_TOOLS OFF CACHE BOOL "" FORCE)
     set(ASSIMP_INSTALL            OFF CACHE BOOL "" FORCE)
     set(ASSIMP_NO_EXPORT          ON  CACHE BOOL "" FORCE)
+    # Avoid /WX breaking the build on Windows due to codepage-related warnings
+    set(ASSIMP_WARNINGS_AS_ERRORS OFF CACHE BOOL "" FORCE)
     FetchContent_MakeAvailable(assimp)
+
+    if(MSVC)
+        if(TARGET assimp)
+            target_compile_options(assimp PRIVATE /WX- /wd4819)
+        elseif(TARGET assimp::assimp)
+            target_compile_options(assimp::assimp PRIVATE /WX- /wd4819)
+        endif()
+    endif()
 endif()
 
 # -------------------------------------------------------------------
@@ -166,14 +211,45 @@ set(SOURCES
     src/Material.cpp
     src/Renderer.cpp
     src/OptixRenderer.cpp
+    src/TextureLoader.cpp
+    src/PBRTLoader.cpp
+    src/Spectrum.cpp
+    src/Texture.cpp
+    src/PBRTv4Materials.cpp
+    src/PBRTv4Lights.cpp
+    src/PBRTv4Parser.cpp
 )
 
 add_executable(PathTracer ${SOURCES})
 
+# Ensure UTF-8 source encoding on Windows (fixes C4819 in MSVC/NVCC)
+if(MSVC)
+    target_compile_options(PathTracer PRIVATE /utf-8)
+    if(PATHTRACER_ENABLE_OPTIX)
+        target_compile_options(PathTracer PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/utf-8>)
+    endif()
+endif()
+
 target_include_directories(PathTracer PRIVATE
     src
     shaders
+    ${glad_SOURCE_DIR}/include
+    ${glad_BINARY_DIR}/include
 )
+
+# OptiX headers
+if(PATHTRACER_ENABLE_OPTIX AND OPTIX_INCLUDE_DIR)
+    target_include_directories(PathTracer PRIVATE ${OPTIX_INCLUDE_DIR})
+    target_compile_definitions(PathTracer PRIVATE PATHTRACER_OPTIX_ENABLED=1)
+endif()
+
+# Include yaml-cpp headers if available
+if(TARGET yaml-cpp)
+    get_target_property(_yaml_includes yaml-cpp INTERFACE_INCLUDE_DIRECTORIES)
+    if(_yaml_includes)
+        target_include_directories(PathTracer PRIVATE ${_yaml_includes})
+    endif()
+endif()
 
 target_link_libraries(PathTracer PRIVATE
     OpenGL::GL
@@ -181,8 +257,18 @@ target_link_libraries(PathTracer PRIVATE
     glad
     glm
     imgui
+    yaml-cpp
     $<IF:$<TARGET_EXISTS:assimp::assimp>,assimp::assimp,assimp>
+    OpenEXR::OpenEXR
 )
+
+# Ensure glad headers are visible to this target (some glad CMake setups don't propagate includes reliably)
+if(TARGET glad)
+    get_target_property(_glad_includes glad INTERFACE_INCLUDE_DIRECTORIES)
+    if(_glad_includes)
+        target_include_directories(PathTracer PRIVATE ${_glad_includes})
+    endif()
+endif()
 
 if(PATHTRACER_ENABLE_OPTIX)
     target_include_directories(PathTracer PRIVATE

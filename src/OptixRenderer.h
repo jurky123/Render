@@ -32,15 +32,19 @@ public:
     void resize         (int width, int height);
     void resetAccumulation();
     void setScene       (const Scene* scene);
+    void setDebugDirectional(bool enabled) { m_debugDirectional = enabled; }
+    void setDebugMode   (int mode) { m_debugMode = mode; }
 
     uint32_t accumulatedSamples() const { return m_accumulatedSamples; }
 
 private:
     /* ---- OptiX pipeline state (compiled away when OptiX not available) ---- */
     void initOptix   ();
+    void buildModule ();
     void buildPipeline();
     void buildSBT    ();
     void buildAccel  ();
+    void buildLights (); // 上传光源和环境光到GPU
     void destroyOptix();
 
     /* ---- CPU fallback ---- */
@@ -54,6 +58,8 @@ private:
     const Scene* m_scene = nullptr;
 
     uint32_t m_accumulatedSamples = 0;
+    bool m_debugDirectional = false;
+    int m_debugMode = 0;  // 0=完整追踪, 1=法线, 2=直接光, 3=材质颜色
 
     /* ---- opaque pimpl for OptiX handles (avoids polluting non-CUDA TUs) ---- */
     struct OptixState;
