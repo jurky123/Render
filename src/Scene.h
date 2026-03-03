@@ -6,7 +6,37 @@
 #include <map>
 
 #include <glm/glm.hpp>
-#include "TextureLoader.h"
+#include "stb_image.h"
+
+// Minimal texture containers (replaces removed TextureLoader)
+struct TextureData
+{
+    unsigned char* pixels = nullptr;
+    int width = 0;
+    int height = 0;
+    int channels = 0;
+    bool ownsMemory = true;
+
+    bool valid() const { return pixels != nullptr && width > 0 && height > 0; }
+
+    void cleanup()
+    {
+        if (ownsMemory && pixels)
+            stbi_image_free(pixels);
+        pixels = nullptr;
+        width = height = channels = 0;
+    }
+};
+
+struct HDRTextureData
+{
+    std::vector<float> pixels;
+    int width = 0;
+    int height = 0;
+    int channels = 0;
+
+    bool valid() const { return !pixels.empty() && width > 0 && height > 0 && channels > 0; }
+};
 
 // Forward
 struct aiScene;

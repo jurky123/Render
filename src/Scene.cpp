@@ -40,6 +40,25 @@ static std::string texturePath(const aiMaterial* mat, aiTextureType type,
     return full.string();
 }
 
+static TextureData loadTexture(const std::string& path)
+{
+    TextureData tex;
+    if (path.empty())
+        return tex;
+
+    stbi_set_flip_vertically_on_load(1);
+    int origChannels = 0;
+    const int desiredChannels = 4; // shaders assume RGBA stride
+    tex.pixels = stbi_load(path.c_str(), &tex.width, &tex.height, &origChannels, desiredChannels);
+    tex.channels = tex.pixels ? desiredChannels : 0;
+    tex.ownsMemory = true;
+
+    if (!tex.pixels)
+        std::cerr << "[Scene] Failed to load texture: " << path << "\n";
+
+    return tex;
+}
+
 // ---------------------------------------------------------------------------
 // Scene::load
 // ---------------------------------------------------------------------------
@@ -88,6 +107,7 @@ bool Scene::loadAppend(const std::string& path)
 
 void Scene::clear()
 {
+    m_environment.texData.cleanup();
     m_meshes.clear();
     m_materials.clear();
     m_lights.clear();
@@ -131,6 +151,7 @@ void Scene::setAmbientIntensity(const glm::vec3& ambient)
 
 void Scene::setEnvironmentMap(const TextureData& texData, const glm::vec3& scale, const glm::mat3& lightTransform)
 {
+    m_environment.texData.cleanup();
     m_environment.texData = texData;
     m_environment.hdrPixels.clear();
     m_environment.hdrWidth = 0;

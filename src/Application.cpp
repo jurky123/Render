@@ -4,7 +4,6 @@
 #include "Camera.h"
 #include "Scene.h"
 #include "Renderer.h"
-#include "PBRTLoader.h"
 
 #include <glm/glm.hpp>
 
@@ -94,13 +93,13 @@ Application::Application(const std::string& title, int width, int height)
     
     bool autoLoadRequested = false;
 
-    // Auto-load bistro scene if available (for testing PBRT texture loading)
+    // Auto-load demo scene if available
     for (size_t i = 0; i < m_sceneList.size(); ++i)
     {
         if (m_sceneList[i].name.find("bistro") != std::string::npos)
         {
             m_selectedSceneIndex = static_cast<int>(i);
-            std::cout << "[PathTracer] Auto-loading PBRT bistro scene: " << m_sceneList[i].path << "\n";
+            std::cout << "[PathTracer] Auto-loading demo scene: " << m_sceneList[i].path << "\n";
             loadScene(m_sceneList[i].path);
             autoLoadRequested = true;
             break;
@@ -150,10 +149,9 @@ void Application::scanSceneDirectories()
     m_sceneList.clear();
     m_sceneCategories.clear();
     
-    // Define scene directories to scan
+    // Define scene directories to scan (only built-in models)
     std::vector<std::pair<std::string, std::string>> sceneDirs = {
-        {"models", "Built-in"},
-        {"pbrt-v4-scenes", "PBRT v4"}
+        {"models", "Built-in"}
     };
     
     // Try to find directories relative to working directory and parent
@@ -193,80 +191,8 @@ void Application::scanSceneDirectories()
 
 void Application::scanDirectory(const std::string& basePath, const std::string& category)
 {
-    if (category == "PBRT v4")
-    {
-        try
-        {
-            for (const auto& entry : std::filesystem::directory_iterator(basePath))
-            {
-                if (!entry.is_directory())
-                    continue;
+    std::vector<std::string> sceneExtensions = {".yaml", ".yml", ".obj", ".fbx", ".gltf", ".glb"};
 
-                const std::filesystem::path sceneDir = entry.path();
-                const std::string sceneName = sceneDir.filename().string();
-                std::vector<std::filesystem::path> candidates;
-
-                for (const auto& fileEntry : std::filesystem::directory_iterator(sceneDir))
-                {
-                    if (!fileEntry.is_regular_file())
-                        continue;
-                    std::string ext = fileEntry.path().extension().string();
-                    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-                    if (ext == ".pbrt")
-                        candidates.push_back(fileEntry.path());
-                }
-
-                if (candidates.empty())
-                    continue;
-
-                std::filesystem::path selected = candidates.front();
-
-                for (const auto& candidate : candidates)
-                {
-                    if (candidate.stem().string() == sceneName)
-                    {
-                        selected = candidate;
-                        break;
-                    }
-                }
-
-                if (selected == candidates.front())
-                {
-                    for (const auto& candidate : candidates)
-                    {
-                        std::string stem = candidate.stem().string();
-                        std::string lowerStem = stem;
-                        std::transform(lowerStem.begin(), lowerStem.end(), lowerStem.begin(), ::tolower);
-                        if (lowerStem.find("material") == std::string::npos &&
-                            lowerStem.find("geometry") == std::string::npos &&
-                            lowerStem.find("light") == std::string::npos &&
-                            lowerStem.find("camera") == std::string::npos &&
-                            lowerStem.find("textures") == std::string::npos)
-                        {
-                            selected = candidate;
-                            break;
-                        }
-                    }
-                }
-
-                SceneEntry sceneEntry;
-                sceneEntry.name = sceneName;
-                sceneEntry.path = selected.string();
-                sceneEntry.category = category;
-                m_sceneList.push_back(sceneEntry);
-            }
-        }
-        catch (const std::exception& e)
-        {
-            std::cerr << "[PathTracer] Error scanning " << basePath << ": " << e.what() << "\n";
-        }
-        return;
-    }
-
-    // Scene format extensions - only YAML primary, PBRT for PBRT v4, do NOT include OBJ/GLTF/FBX
-    // as they are model files, not scene files
-    std::vector<std::string> sceneExtensions = {".yaml", ".yml", ".pbrt"};
-    
     // Files to skip - commonly referenced as assets, not entry points
     std::vector<std::string> skipPatterns = {
         "left.obj", "right.obj", "wall.obj", "short_block.obj", "tall_block.obj", // cornell box parts
@@ -274,17 +200,17 @@ void Application::scanDirectory(const std::string& basePath, const std::string& 
         "breakfast_room.obj",  // single model file, not scene
         "light.mtl", "material.mtl"  // material files
     };
-    
+
     try
     {
         for (const auto& entry : std::filesystem::recursive_directory_iterator(basePath))
         {
             if (!entry.is_regular_file()) continue;
-            
+
             std::string filename = entry.path().filename().string();
             std::string lowFilename = filename;
             std::transform(lowFilename.begin(), lowFilename.end(), lowFilename.begin(), ::tolower);
-            
+
             // Skip files by exact name match
             bool shouldSkip = false;
             for (const auto& skipPattern : skipPatterns)
@@ -296,11 +222,11 @@ void Application::scanDirectory(const std::string& basePath, const std::string& 
                 }
             }
             if (shouldSkip) continue;
-            
+
             // Check extension
             std::string ext = entry.path().extension().string();
             std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-            
+
             bool isSceneFile = false;
             for (const auto& validExt : sceneExtensions)
             {
@@ -310,9 +236,9 @@ void Application::scanDirectory(const std::string& basePath, const std::string& 
                     break;
                 }
             }
-            
+
             if (!isSceneFile) continue;
-            
+
             // Skip common non-scene patterns
             if (lowFilename.find("_mtl") != std::string::npos ||        // Material files
                 lowFilename.find("texture") != std::string::npos ||     // Textures
@@ -324,10 +250,10 @@ void Application::scanDirectory(const std::string& basePath, const std::string& 
             {
                 continue;
             }
-            
+
             // Create scene entry
             SceneEntry sceneEntry;
-            
+
             // Build display name from path relative to base
             std::filesystem::path relPath = std::filesystem::relative(entry.path(), basePath);
             sceneEntry.name = relPath.parent_path().string();
@@ -336,11 +262,11 @@ void Application::scanDirectory(const std::string& basePath, const std::string& 
                 sceneEntry.name += "/";
             }
             sceneEntry.name += entry.path().stem().string();
-            
+
             // Store the path relative to working directory
             sceneEntry.path = entry.path().string();
             sceneEntry.category = category;
-            
+
             m_sceneList.push_back(sceneEntry);
         }
     }
@@ -414,14 +340,6 @@ Application::LoadResult Application::loadSceneBlocking(const std::string& path)
         m_loadingPhase.store(3);
         m_loadingProgress.store(0.2f);
         ok = scene->loadFromYaml(resolvedPath);
-    }
-    else if (ext == ".pbrt")
-    {
-        logFile << "[PathTracer] Using PBRT loader\n";
-        logFile.flush();
-        m_loadingPhase.store(3);
-        m_loadingProgress.store(0.2f);
-        ok = PBRTLoader::load(resolvedPath, *scene);
     }
     else
     {

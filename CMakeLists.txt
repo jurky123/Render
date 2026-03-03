@@ -1,8 +1,10 @@
 cmake_minimum_required(VERSION 3.18)
-project(PathTracer LANGUAGES CXX)
+project(PathTracer LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
 
 # Force Visual Studio toolchain on Windows to avoid MSYS64 interference
 if(WIN32 AND NOT CMAKE_C_COMPILER_FORCED)
@@ -167,28 +169,46 @@ FetchContent_MakeAvailable(yaml-cpp)
 message(STATUS "yaml-cpp fetched successfully")
 
 # -------------------------------------------------------------------
-# OpenEXR (for EXR environment map support)
-# -------------------------------------------------------------------
-find_package(OpenEXR CONFIG REQUIRED)
-message(STATUS "Found OpenEXR version ${OpenEXR_VERSION}")
-
-# -------------------------------------------------------------------
-# Assimp
+# Assimp (kept for model loading)
 # -------------------------------------------------------------------
 find_package(assimp QUIET)
 if(NOT assimp_FOUND)
     message(STATUS "System Assimp not found – fetching from source.")
+    set(ASSIMP_LOCAL_ZIP "${CMAKE_SOURCE_DIR}/assimp-5.3.1.zip")
+    if(EXISTS ${ASSIMP_LOCAL_ZIP})
+        message(STATUS "Using local assimp archive: ${ASSIMP_LOCAL_ZIP}")
+        set(ASSIMP_URL ${ASSIMP_LOCAL_ZIP})
+    else()
+        set(ASSIMP_URL https://github.com/assimp/assimp/archive/refs/tags/v5.3.1.zip)
+    endif()
     FetchContent_Declare(
         assimp
-        URL https://github.com/assimp/assimp/archive/refs/tags/v5.3.1.zip
+        URL ${ASSIMP_URL}
     )
     set(ASSIMP_BUILD_TESTS        OFF CACHE BOOL "" FORCE)
     set(ASSIMP_BUILD_ASSIMP_TOOLS OFF CACHE BOOL "" FORCE)
     set(ASSIMP_INSTALL            OFF CACHE BOOL "" FORCE)
     set(ASSIMP_NO_EXPORT          ON  CACHE BOOL "" FORCE)
-    # Avoid /WX breaking the build on Windows due to codepage-related warnings
     set(ASSIMP_WARNINGS_AS_ERRORS OFF CACHE BOOL "" FORCE)
-    FetchContent_MakeAvailable(assimp)
+
+    FetchContent_GetProperties(assimp)
+    if(NOT assimp_POPULATED)
+        FetchContent_Populate(assimp)
+
+        # assimp's CMake adds TARGET_COMPILE_FEATURES(assimp PRIVATE c_std_99), which
+        # fails on MSVC because C compile features are not modeled. Strip that line
+        # so the project can configure with MSVC.
+        if(MSVC)
+            set(_assimp_cmakelists "${assimp_SOURCE_DIR}/code/CMakeLists.txt")
+            if(EXISTS ${_assimp_cmakelists})
+                file(READ ${_assimp_cmakelists} _assimp_cmake_contents)
+                string(REPLACE "TARGET_COMPILE_FEATURES(assimp PRIVATE c_std_99)" "" _assimp_cmake_contents "${_assimp_cmake_contents}")
+                file(WRITE ${_assimp_cmakelists} "${_assimp_cmake_contents}")
+            endif()
+        endif()
+
+        add_subdirectory(${assimp_SOURCE_DIR} ${assimp_BINARY_DIR})
+    endif()
 
     if(MSVC)
         if(TARGET assimp)
@@ -211,13 +231,7 @@ set(SOURCES
     src/Material.cpp
     src/Renderer.cpp
     src/OptixRenderer.cpp
-    src/TextureLoader.cpp
-    src/PBRTLoader.cpp
-    src/Spectrum.cpp
-    src/Texture.cpp
-    src/PBRTv4Materials.cpp
-    src/PBRTv4Lights.cpp
-    src/PBRTv4Parser.cpp
+    src/stb_image_impl.cpp
 )
 
 add_executable(PathTracer ${SOURCES})
@@ -259,7 +273,6 @@ target_link_libraries(PathTracer PRIVATE
     imgui
     yaml-cpp
     $<IF:$<TARGET_EXISTS:assimp::assimp>,assimp::assimp,assimp>
-    OpenEXR::OpenEXR
 )
 
 # Ensure glad headers are visible to this target (some glad CMake setups don't propagate includes reliably)

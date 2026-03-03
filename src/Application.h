@@ -21,7 +21,7 @@ struct SceneEntry
 {
     std::string name;      ///< Display name
     std::string path;      ///< Relative path to scene file
-    std::string category;  ///< Category (e.g., "Cornell Box", "PBRT", etc.)
+    std::string category;  ///< Category (e.g., "Cornell Box", "Built-in")
 };
 
 /**
