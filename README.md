@@ -1,238 +1,55 @@
-# Path Tracer 路径追踪渲染器
+# PathTracer 渲染器项目
 
-基于 **NVIDIA OptiX 7** 的实时路径追踪渲染器，支持鼠标键盘交互界面以及多格式场景加载。
+## 项目简介
+本项目为基于 OptiX 的高性能物理路径追踪渲染器，支持加载和渲染多种 3D 场景格式，具备现代 OpenGL/OptiX 渲染管线、材质与贴图支持、可交互相机与光源配置。
 
-## ✨ 特性
+## 主要特性
+- 支持 YAML 场景描述文件（自定义相机、光源、模型组合）
+- 支持 Assimp 加载主流网格格式：OBJ、FBX、GLTF/GLB、DAE、PLY、STL 等
+- 材质系统支持 PBR（金属度/粗糙度）、基础漫反射、镜面、玻璃等类型
+- 贴图支持 JPG/PNG（自动转 RGBA，shader 采样一致）
+- 可配置环境光、定向光、点光源
+- 交互式窗口，支持 ImGui UI 调节参数
+- CUDA/OptiX 加速路径追踪，支持多光线反弹
 
-| 功能 | 说明 |
-|------|------|
-| **GPU 路径追踪** | NVIDIA OptiX 7 GPU 加速，支持渐进式累积采样 |
-| **交互式 UI** | GLFW + Dear ImGui，支持实时相机控制和参数调整 |
-| **PBR 材质系统** | Disney 金属-粗糙度 BSDF，完整支持金属度、粗糙度、透射率、IOR |
-| **多格式场景加载** | Assimp 支持 40+ 格式（OBJ、FBX、glTF、DAE、3DS、PBRT v4 等） |
-| **PBRT v4 支持** | 完整的 PBRT v4 场景文件解析（摄像机、灯光、材质、几何体） |
-| **CPU 回退** | 无 GPU 时自动切换为 CPU 光线追踪，界面仍可运行 |
-| **色调映射** | ACES 胶片色调映射 + sRGB 伽马校正 |
+## 目录结构
+```
+├─models/           # 场景与模型资源（YAML/OBJ/贴图等）
+├─src/              # 源码（Application/Scene/Renderer/OptixRenderer 等）
+├─shaders/          # CUDA/OptiX shader 内核
+├─include/          # 头文件（如 tinyexr.h）
+├─build/            # CMake 构建输出
+├─CMakeLists.txt    # 构建脚本，自动拉取依赖
+├─README.md         # 项目说明
+```
+
+## 场景加载说明
+- YAML 场景：如 `models/breakfast_room/breakfast_room.yaml`，可指定相机、光源、模型组合，支持 `Models`/`ComplexModels` 节点。
+- 网格文件：直接加载 OBJ/FBX/GLTF/DAE/PLY/等，自动解析材质与贴图。
+- 贴图：支持 JPG/PNG，自动转 RGBA，shader 采样一致。
+
+## 构建与运行
+1. 安装 CUDA/OptiX SDK（建议 CUDA 11+，OptiX 7.7+/8.1+）
+2. Windows 推荐 VS2022 + CMake 3.18+
+3. 进入项目根目录，执行：
+   ```
+   cmake -S . -B build
+   cmake --build build --config Release
+   ```
+4. 运行 `build/Debug/PathTracer.exe` 或 `build/Release/PathTracer.exe`
+
+## 依赖说明
+- GLFW、GLAD、GLM、ImGui、yaml-cpp、assimp（均自动拉取，无需手动下载）
+- stb_image（本地实现，支持贴图加载）
+
+## 常见问题
+- 场景贴图异常：请确保图片为常见格式（JPG/PNG），且与模型/mtl文件路径一致
+- OptiX/CUDA 环境未配置：请检查 SDK 路径与环境变量
+- 其他问题可查阅 `PathTracer_debug.log` 日志
+
+## 贡献与扩展
+欢迎提交 issue 或 PR，支持更多格式、材质类型、渲染特性扩展。
 
 ---
 
-## 📦 依赖
-
-所有依赖均通过 CMake FetchContent 自动下载，**无需手动安装**：
-
-| 库 | 用途 | 版本 |
-|----|------|------|
-| [GLFW](https://github.com/glfw/glfw) | 跨平台窗口和输入 | 3.3+ |
-| [GLAD](https://github.com/Dav1dde/glad) | OpenGL 4.5 加载器 | 最新 |
-| [GLM](https://github.com/g-truc/glm) | 数学库 | 最新 |
-| [Dear ImGui](https://github.com/ocornut/imgui) | UI 库 | 1.89+ |
-| [Assimp](https://github.com/assimp/assimp) | 3D 模型导入 | 5.3+ |
-| **[NVIDIA OptiX SDK](https://developer.nvidia.com/optix)** | GPU 光线追踪（可选） | 7.x |
-| **CUDA Toolkit** | GPU 计算（OptiX 时必须） | 11+ |
-
-### 系统要求
-
-- **编译器**: C++17（MSVC 2019+、GCC 9+、Clang 10+）
-- **CMake**: ≥ 3.18
-- **OpenGL 驱动**: 4.5+
-- **GPU**（可选）: NVIDIA GTX 960+ 或 RTX（建议）
-
----
-
-## 🔨 编译指南
-
-### 快速开始（CPU 模式）
-
-```bash
-cd Render
-cmake -B build -DCMAKE_BUILD_TYPE=Release -DPATHTRACER_ENABLE_OPTIX=OFF
-cmake --build build --config Release -j$(nproc)
-cd build/Debug
-./PathTracer.exe
-```
-
-### 启用 OptiX GPU 加速（Windows/MSVC）
-
-```powershell
-# 下载 OptiX SDK 7.x 并设置环境变量
-$env:OPTIX_ROOT = "C:\Program Files\NVIDIA\OptiX SDK 7.x.0"
-
-# 配置和编译
-cmake -B build -DCMAKE_BUILD_TYPE=Release -DPATHTRACER_ENABLE_OPTIX=ON
-cmake --build build --config Release
-
-# 运行
-.\build\Release\PathTracer.exe
-```
-
-### Linux/GCC 编译
-
-```bash
-cmake -B build \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_CXX_COMPILER=g++ \
-  -DPATHTRACER_ENABLE_OPTIX=OFF
-
-cmake --build build --config Release -j$(nproc)
-./build/PathTracer
-```
-
-### 编译选项
-
-| 选项 | 说明 | 默认值 |
-|------|------|--------|
-| `DPATHTRACER_ENABLE_OPTIX` | 启用 OptiX GPU 支持 | `OFF` |
-| `CMAKE_BUILD_TYPE` | 构建类型 | `Release` |
-
----
-
-## ⌨️ 使用指南
-
-### 启动命令
-
-**加载特定场景：**
-```bash
-PathTracer.exe --scene /path/to/scene.glb
-PathTracer.exe --scene /path/to/scene.pbrt        # PBRT v4 格式
-PathTracer.exe --scene /path/to/scene.obj         # Wavefront OBJ
-```
-
-**自定义窗口大小和采样：**
-```bash
-PathTracer.exe --scene scene.gltf --width 1920 --height 1200 --spp 8
-```
-
-**诊断 PBRT 场景（查看加载的摄像机、灯光、材质）：**
-```bash
-PathTracer.exe --test-pbrt scene.pbrt              # 输出详细解析信息
-```
-
-### 运行时快捷键
-
-| 按键 | 功能 |
-|------|------|
-| `W / A / S / D` | 前后左右移动（飞行相机） |
-| `Q / E` | 下降 / 上升 |
-| `鼠标右键拖拽` | 旋转视点 |
-| `鼠标滚轮` | 缩放（改变 FOV） |
-| `F1` | 显示/隐藏 UI 面板 |
-| `Esc` | 退出程序 |
-
-### PBRT v4 场景支持
-
-PathTracer 完整支持 PBRT v4 场景文件，包括：
-- ✅ 摄像机（LookAt、投影参数）
-- ✅ 材质（导电体、电介质、漫反射、涂层等）
-- ✅ 灯光（点光源、方向光、面光源）
-- ✅ 几何体（网格、PLY、球体、圆柱等）
-- ✅ 变换（平移、旋转、缩放）
-- ✅ 引用和命名对象（Include、ObjectBegin/End）
-
-**加载官方 PBRT v4 场景示例：**
-```bash
-PathTracer.exe --scene pbrt-v4-scenes/crown/crown.pbrt
-PathTracer.exe --test-pbrt pbrt-v4-scenes/sportscar/sportscar-area-lights.pbrt
-```
-
----
-
-## 📁 项目结构
-
-```
-Render/
-├── CMakeLists.txt              # 主 CMake 构建脚本
-├── README.md                   # 本文件
-├── .gitignore                  # Git 忽略配置
-│
-├── src/                        # 源代码目录
-│   ├── main.cpp                # 程序入口点（命令行解析）
-│   ├── Application.h/cpp       # 应用主循环（GLFW、ImGui、渲染循环）
-│   ├── Camera.h/cpp            # 飞行相机实现
-│   ├── Scene.h/cpp             # 场景数据结构和加载器
-│   ├── Material.h/cpp          # PBR 材质定义
-│   ├── Renderer.h/cpp          # 渲染器门面
-│   ├── OptixRenderer.h/cpp     # OptiX 7 + CPU 回退
-│   ├── Window.h/cpp            # 窗口工具
-│   ├── PBRTLoader.h/cpp        # PBRT v4 完整解析器 (~1700 行)
-│   └── PBRTLoaderOfficial.h    # 官方库包装（预留）
-│
-├── shaders/                    # CUDA/OptiX 着色器
-│   ├── launch_params.h         # 共享数据结构
-│   ├── path_tracer.cu          # OptiX 核心程序
-│   └── *.ptx                   # 编译输出（git 忽略）
-│
-├── build/                      # CMake 构建目录（自动生成，git 忽略）
-│   ├── Debug/PathTracer.exe    # 最终可执行文件
-│   └── ...
-│
-├── pbrt-v4/                    # PBRT v4 官方库（参考用）
-├── pbrt-v4-scenes/             # PBRT v4 测试场景
-└── models/                     # 示例模型（git 忽略）
-```
-
-### 核心模块说明
-
-| 文件 | 功能 | 关键点 |
-|------|------|--------|
-| **PBRTLoader** | PBRT v4 解析 | Token-based，支持所有材质/灯光/摄像机 |
-| **OptixRenderer** | GPU 路径追踪 | OptiX 7 + CPU 回退，渐进累积 |
-| **Application** | 主应用循环 | GLFW 管理、ImGui UI、渲染调度 |
-| **Scene** | 场景管理 | Assimp 加载、数据组织 |
-| **Camera** | 交互相机 | 飞行模式（WASD） |
-
----
-
-## 🎮 常见使用场景
-
-### 1. 加载并渲染 OBJ 模型
-```bash
-./PathTracer.exe --scene models/cornell_box/cbox.obj -width 1280 --height 720
-```
-
-### 2. 渲染 PBRT v4 官方场景
-```bash
-./PathTracer.exe --scene pbrt-v4-scenes/crown/crown.pbrt
-```
-
-### 3. 诊断 PBRT 场景加载情况
-```bash
-./PathTracer.exe --test-pbrt pbrt-v4-scenes/sportscar/sportscar-area-lights.pbrt
-# 输出：摄像机、灯光、材质数量及属性
-```
-
-### 4. 高分辨率高质量渲染
-```bash
-./PathTracer.exe --scene scene.gltf --width 4096 --height 2160 --spp 32
-```
-
----
-
-## 🔍 API 文档
-
-### PBRT v4 加载器验证
-
-**Current Status**: ✅ 完全支持
-
-通过 `--test-pbrt` 模式可验证：
-- ✅ 摄像机正确解析（Eye, Target, Up, FOVy）
-- ✅ 所有材质属性解析（色彩、金属度、粗糙度、IOR、透射）
-- ✅ 灯光完整解析（位置、方向、强度）
-- ✅ 几何体正确加载（网格、PLY、原始体）
-
-### 扩展指南
-
-添加新格式支持：修改 `PBRTLoader.cpp` 或 `Scene.cpp`
-添加新材质类型：修改 `Material.h` + `OptixRenderer.cpp`
-自定义 UI：编辑 `Application.cpp` 中 ImGui 部分
-
----
-
-## 📄 截图 Screenshots
-
-> （待 GPU 环境下截图补充）
-
----
-
-## License
-
-MIT
+如需自定义场景，请参考 `models/cornell_box/cornell_box.yaml` 或 `models/breakfast_room/breakfast_room.yaml`。
