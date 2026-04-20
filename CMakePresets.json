@@ -1,0 +1,42 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 18,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "vs2022-x64",
+      "displayName": "VS2022 x64",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_SUPPRESS_REGENERATION": "ON"
+      }
+    },
+    {
+      "name": "vs2022-x64-clean",
+      "displayName": "VS2022 x64 Clean Dir",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build_clean",
+      "cacheVariables": {
+        "CMAKE_SUPPRESS_REGENERATION": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "debug",
+      "configurePreset": "vs2022-x64",
+      "configuration": "Debug"
+    },
+    {
+      "name": "debug-clean",
+      "configurePreset": "vs2022-x64-clean",
+      "configuration": "Debug"
+    }
+  ]
+}

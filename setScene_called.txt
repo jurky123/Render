@@ -1,1 +1,0 @@
-setScene called with scene=ok optixReady=1

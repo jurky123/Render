@@ -856,7 +856,8 @@ void OptixRenderer::buildSBT()
                 oss << "[OptiX] Mesh " << i << " material '" << mat.name
                     << "' type=" << static_cast<int>(mat.type)
                     << " baseColor: (" << mat.baseColor.r << ", "
-                    << mat.baseColor.g << ", " << mat.baseColor.b << ")";
+                    << mat.baseColor.g << ", " << mat.baseColor.b << ")"
+                    << " transmission=" << mat.transmission;
                 logOptixLine(oss.str());
             }
             hitRecords[i].data.metallic     = mat.metallic;

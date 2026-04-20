@@ -1,6 +1,4 @@
 #include "Application.h"
-#include "Scene.h"
-#include "OptixRenderer.h"
 
 #include <iostream>
 #include <string>

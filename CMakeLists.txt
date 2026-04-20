@@ -5,6 +5,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_SUPPRESS_REGENERATION ON)
 
 # Force Visual Studio toolchain on Windows to avoid MSYS64 interference
 if(WIN32 AND NOT CMAKE_C_COMPILER_FORCED)
@@ -174,10 +175,10 @@ message(STATUS "yaml-cpp fetched successfully")
 find_package(assimp QUIET)
 if(NOT assimp_FOUND)
     message(STATUS "System Assimp not found – fetching from source.")
-    set(ASSIMP_LOCAL_ZIP "${CMAKE_SOURCE_DIR}/assimp-5.3.1.zip")
-    if(EXISTS ${ASSIMP_LOCAL_ZIP})
-        message(STATUS "Using local assimp archive: ${ASSIMP_LOCAL_ZIP}")
-        set(ASSIMP_URL ${ASSIMP_LOCAL_ZIP})
+    set(ASSIMP_LOCAL_SRC "${CMAKE_SOURCE_DIR}/assimp-5.3.1")
+    if(EXISTS ${ASSIMP_LOCAL_SRC})
+        message(STATUS "Using local assimp source: ${ASSIMP_LOCAL_SRC}")
+        set(ASSIMP_URL "file://${ASSIMP_LOCAL_SRC}")
     else()
         set(ASSIMP_URL https://github.com/assimp/assimp/archive/refs/tags/v5.3.1.zip)
     endif()
@@ -224,14 +225,24 @@ endif()
 # -------------------------------------------------------------------
 set(SOURCES
     src/main.cpp
-    src/Application.cpp
     src/Window.cpp
     src/Camera.cpp
-    src/Scene.cpp
     src/Material.cpp
-    src/Renderer.cpp
     src/OptixRenderer.cpp
     src/stb_image_impl.cpp
+    src/app/Application.cpp
+    src/app/SceneController.cpp
+    src/app/ViewportController.cpp
+    src/scene/Scene.cpp
+    src/scene/SceneImporter.cpp
+    src/scene/ScenePostProcessor.cpp
+    src/scene/importers/TextureRepository.cpp
+    src/scene/importers/MaterialLoader.cpp
+    src/scene/importers/AssimpSceneImporter.cpp
+    src/scene/importers/YamlSceneImporter.cpp
+    src/render/Renderer.cpp
+    src/render/CpuFallbackBackend.cpp
+    src/render/optix/OptixBackend.cpp
 )
 
 add_executable(PathTracer ${SOURCES})
@@ -246,6 +257,11 @@ endif()
 
 target_include_directories(PathTracer PRIVATE
     src
+    src/app
+    src/scene
+    src/scene/importers
+    src/render
+    src/render/optix
     shaders
     ${glad_SOURCE_DIR}/include
     ${glad_BINARY_DIR}/include
@@ -308,21 +324,14 @@ if(PATHTRACER_ENABLE_OPTIX)
         ${CUDAToolkit_INCLUDE_DIRS}
         ${OPTIX_INCLUDE_DIR}
         shaders
+        shaders/device
     )
     target_compile_options(ptx_shaders PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:--relocatable-device-code=true>
     )
 
-    add_custom_command(
-        TARGET PathTracer POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            $<TARGET_OBJECTS:ptx_shaders>
-            $<TARGET_FILE_DIR:PathTracer>/path_tracer.ptx
-        COMMENT "Copying PTX shaders"
-    )
-
     target_compile_definitions(PathTracer PRIVATE
-        PTX_DIR=\"$<TARGET_FILE_DIR:PathTracer>\"
+        PTX_DIR=\"${CMAKE_BINARY_DIR}/ptx_shaders.dir/$<CONFIG>\"
     )
 endif()
 

@@ -7,6 +7,12 @@
 #include <cuda_runtime.h>
 
 #include "launch_params.h"
+#include "device/device_payload.cuh"
+#include "device/device_math.cuh"
+#include "device/device_texture.cuh"
+#include "device/device_material.cuh"
+#include "device/device_curve.cuh"
+#include "device/device_closesthit.cuh"
 
 // 将启动参数结构体绑定到 OptiX 的 "params" 变量
 extern "C" __constant__ LaunchParams params;
@@ -15,77 +21,6 @@ extern "C" __constant__ LaunchParams params;
 // 注意：debugMode 现在是运行时设置的 - 见 launch_params.h
 
 // ---------------------------------------------------------------------------
-// 载荷：编码 float3 (此次命中的辐射度贡献)
-// ---------------------------------------------------------------------------
-static __forceinline__ __device__ void setPayload(float3 p)
-{
-    optixSetPayload_0(__float_as_uint(p.x));
-    optixSetPayload_1(__float_as_uint(p.y));
-    optixSetPayload_2(__float_as_uint(p.z));
-}
-
-static __forceinline__ __device__ float3 getPayload()
-{
-    return {__uint_as_float(optixGetPayload_0()),
-            __uint_as_float(optixGetPayload_1()),
-            __uint_as_float(optixGetPayload_2())};
-}
-
-// ---------------------------------------------------------------------------
-// 数学辅助函数
-// ---------------------------------------------------------------------------
-static __forceinline__ __device__ float3 operator+(float3 a, float3 b)
-{ return {a.x+b.x, a.y+b.y, a.z+b.z}; }
-static __forceinline__ __device__ float3 operator-(float3 a, float3 b)
-{ return {a.x-b.x, a.y-b.y, a.z-b.z}; }
-static __forceinline__ __device__ float3 operator*(float3 a, float3 b)
-{ return {a.x*b.x, a.y*b.y, a.z*b.z}; }
-static __forceinline__ __device__ float3 operator*(float s, float3 a)
-{ return {s*a.x, s*a.y, s*a.z}; }
-static __forceinline__ __device__ float3 operator*(float3 a, float s)
-{ return {a.x*s, a.y*s, a.z*s}; }
-static __forceinline__ __device__ float3 operator/(float3 a, float s)
-{ return {a.x/s, a.y/s, a.z/s}; }
-static __forceinline__ __device__ float3 operator-(float3 a)
-{ return {-a.x, -a.y, -a.z}; }
-static __forceinline__ __device__ float  dot(float3 a, float3 b)
-{ return a.x*b.x + a.y*b.y + a.z*b.z; }
-static __forceinline__ __device__ float  length(float3 a)
-{ return sqrtf(dot(a, a)); }
-static __forceinline__ __device__ float3 normalize(float3 a)
-{ const float inv = rsqrtf(fmaxf(dot(a,a), 1e-10f)); return {a.x*inv, a.y*inv, a.z*inv}; }
-static __forceinline__ __device__ float3 cross(float3 a, float3 b)
-{ return {a.y*b.z - a.z*b.y, a.z*b.x - a.x*b.z, a.x*b.y - a.y*b.x}; }
-static __forceinline__ __device__ float3 lerp(float3 a, float3 b, float t)
-{ return {a.x+(b.x-a.x)*t, a.y+(b.y-a.y)*t, a.z+(b.z-a.z)*t}; }
-static __forceinline__ __device__ float  lerpf(float a, float b, float t)
-{ return a + (b - a) * t; }
-static __forceinline__ __device__ float  clampf(float v, float lo, float hi)
-{ return v < lo ? lo : (v > hi ? hi : v); }
-static __forceinline__ __device__ float3 clamp3(float3 v, float lo, float hi)
-{ return {clampf(v.x,lo,hi), clampf(v.y,lo,hi), clampf(v.z,lo,hi)}; }
-
-static __forceinline__ __device__ float3 reflectVec(float3 v, float3 n)
-{ return v - 2.f * dot(v, n) * n; }
-
-static __forceinline__ __device__ float3 safeNormalize(float3 v)
-{ return normalize(v); }
-
-static __forceinline__ __device__ float3 fresnelSchlick(float cosTheta, float3 f0)
-{
-    float t = fmaxf(0.f, 1.f - cosTheta);
-    float t2 = t * t;
-    float t5 = t2 * t2 * t;
-    return f0 + (make_float3(1.f, 1.f, 1.f) - f0) * t5;
-}
-
-static __forceinline__ __device__ float ggxD(float NoH, float alpha)
-{
-    float a2 = alpha * alpha;
-    float d = (NoH * NoH) * (a2 - 1.f) + 1.f;
-    return a2 / (3.14159265f * d * d);
-}
-
 static __forceinline__ __device__ float ggxG1(float NoV, float alpha)
 {
     float a2 = alpha * alpha;
@@ -900,7 +835,12 @@ extern "C" __global__ void __raygen__pathTrace()
         if (matType == MaterialTypeData::BasicPBR) {
             // For legacy PBR, use the existing computation
             directAlbedo = albedo * (1.f - metallic);
+            // Highly transmissive surfaces should not contribute diffuse direct light
+            if (transmission > 0.2f) directAlbedo = make_float3(0.f, 0.f, 0.f);
         }
+        // Remove energy that should go to transmission for direct lighting
+        float transCut = clampf(transmission, 0.f, 1.f);
+        directAlbedo = directAlbedo * (1.f - transCut);
         
         // Clamp roughness for stability
         float clampedRoughness = clampf(matType == MaterialTypeData::BasicPBR ? roughness : uroughness, 0.02f, 1.f);
@@ -1149,7 +1089,9 @@ extern "C" __global__ void __raygen__pathTrace()
             default: {
                 // Legacy PBR material sampling
                 float NoV = fmaxf(dot(normal, V), 0.f);
-                bool isTransmissive = transmission > 0.5f;
+                // Treat any non-zero transmission as refractive; weight by transmission probability
+                float pTrans = clampf(transmission, 0.f, 0.95f);
+                bool isTransmissive = pTrans > 0.001f;
                 
                 float f0d = (ior - 1.f) / (ior + 1.f);
                 f0d = f0d * f0d;
@@ -1157,8 +1099,8 @@ extern "C" __global__ void __raygen__pathTrace()
                 float pSpec = clampf((f0.x + f0.y + f0.z) * (1.f / 3.f), 0.05f, 0.95f);
                 
                 float xi = rng.nextFloat();
-                
-                if (isTransmissive && xi < transmission) {
+
+                if (isTransmissive && xi < pTrans) {
                     // Refraction
                     float cosThetaI = dot(normal, V);
                     float etaRatio = cosThetaI > 0.0f ? 1.0f / ior : ior;
@@ -1182,7 +1124,11 @@ extern "C" __global__ void __raygen__pathTrace()
                         ms.pdf = 1.0f;
                         ms.isDelta = true;
                     }
-                } else if (xi < pSpec) {
+                } else {
+                    // Renormalize xi for the non-transmission branch
+                    float xi2 = (isTransmissive ? (xi - pTrans) / fmaxf(1.f - pTrans, 1e-6f) : xi);
+
+                    if (xi2 < pSpec) {
                     // GGX specular
                     float alpha = clampedRoughness * clampedRoughness;
                     float3 H = sampleGGX(normal, alpha, rng.nextFloat(), rng.nextFloat());
@@ -1202,7 +1148,7 @@ extern "C" __global__ void __raygen__pathTrace()
                         ms.pdf = 0.f;
                     }
                     ms.isDelta = false;
-                } else {
+                    } else {
                     // Cosine-weighted diffuse
                     ms.wi = hemisphereSample(normal, rng.nextFloat(), rng.nextFloat());
                     float NoL = fmaxf(dot(normal, ms.wi), 0.f);
@@ -1212,6 +1158,7 @@ extern "C" __global__ void __raygen__pathTrace()
                     ms.f = kd * (1.f / 3.14159265f);
                     ms.pdf = NoL * (1.f / 3.14159265f) * (1.f - pSpec);
                     ms.isDelta = false;
+                    }
                 }
                 break;
             }
@@ -1225,8 +1172,8 @@ extern "C" __global__ void __raygen__pathTrace()
         
         // Update throughput
         if (ms.isDelta) {
-            // Delta distributions have pdf = 1, throughput = f
-            throughput = throughput * ms.f;
+            // Delta components still divide by branch probability for energy balance
+            throughput = throughput * (ms.f / fmaxf(ms.pdf, 1e-6f));
         } else {
             // Regular materials: throughput *= f * cos / pdf
             throughput = throughput * ms.f * (fabsf(dot(normal, ms.wi)) / fmaxf(ms.pdf, 1e-6f));
@@ -1306,7 +1253,7 @@ extern "C" __global__ void __miss__envmap()
     if (rayFlags & OPTIX_RAY_FLAG_TERMINATE_ON_FIRST_HIT)
     {
         //  阴影光线未命中 - 光源可见
-        optixSetPayload_0(__float_as_uint(1.0f));
+        payloadSetShadowBlocked(1.0f);
         return;
     }
     
@@ -1327,10 +1274,10 @@ extern "C" __global__ void __miss__envmap()
 // ---------------------------------------------------------------------------
 // 纹理采样辅助函数
 // ---------------------------------------------------------------------------
-static __device__ float3 sampleTexture(const uint8_t* pixels, int width, int height, float2 uv)
+static __device__ float4 sampleTextureRGBA(const uint8_t* pixels, int width, int height, float2 uv)
 {
     if (!pixels || width <= 0 || height <= 0)
-        return {1.f, 1.f, 1.f};
+        return {1.f, 1.f, 1.f, 1.f};
     
     // 包裹坐标
     uv.x = uv.x - floorf(uv.x);
@@ -1349,8 +1296,16 @@ static __device__ float3 sampleTexture(const uint8_t* pixels, int width, int hei
     float r = pixels[pixelIdx + 0] * (1.f / 255.f);
     float g = pixels[pixelIdx + 1] * (1.f / 255.f);
     float b = pixels[pixelIdx + 2] * (1.f / 255.f);
+    float a = pixels[pixelIdx + 3] * (1.f / 255.f);
     
-    return {r, g, b};
+    return {r, g, b, a};
+}
+
+// Backward-compatible helper returning RGB only
+static __device__ float3 sampleTexture(const uint8_t* pixels, int width, int height, float2 uv)
+{
+    float4 v = sampleTextureRGBA(pixels, width, height, uv);
+    return make_float3(v.x, v.y, v.z);
 }
 
 static __device__ float3 sampleTextureHDR(const float4* pixels, int width, int height, float2 uv)
@@ -1625,7 +1580,7 @@ extern "C" __global__ void __closesthit__pbr()
     if (rayFlags & OPTIX_RAY_FLAG_TERMINATE_ON_FIRST_HIT)
     {
         // 阴影光线命中物体 - 设置为遮挡（使用特殊值 0.25f 以便调试）
-        optixSetPayload_0(__float_as_uint(0.25f));
+        payloadSetShadowBlocked(0.25f);
         return;
     }
 
@@ -1770,10 +1725,14 @@ extern "C" __global__ void __closesthit__pbr()
                          uv0.y * b0 + uv1.y * b1 + uv2.y * b2);
     }
     
-    // 采样Base Color纹理
+    float alpha = 1.f;
+
+    // 采样Base Color纹理并读取alpha（用于cutout/半透明）
     if (data->hasBaseColorTex && data->baseColorTexWidth > 0 && data->baseColorTexHeight > 0)
     {
-        matBase = sampleTexture(data->baseColorTexPixels, data->baseColorTexWidth, data->baseColorTexHeight, uv);
+        float4 baseSample = sampleTextureRGBA(data->baseColorTexPixels, data->baseColorTexWidth, data->baseColorTexHeight, uv);
+        matBase = make_float3(baseSample.x, baseSample.y, baseSample.z);
+        alpha = baseSample.w;
     }
     
     // 采样Metallic + Roughness纹理（通常R通道=金属度，G通道=粗糙度）
@@ -1818,6 +1777,25 @@ extern "C" __global__ void __closesthit__pbr()
         float3 transmissionSample = sampleTexture(data->transmissionTexPixels, data->transmissionTexWidth, data->transmissionTexHeight, uv);
         matTransmission = matTransmission * transmissionSample.x;  // 使用R通道
     }
+
+    // Alpha cutout：如果alpha很低则视为未命中；否则将alpha转换为透射度补充
+    if (alpha < 0.05f)
+    {
+        // 标记为未命中，回退到背景/下一次追踪
+        optixSetPayload_0(__float_as_uint(1e10f));
+        optixSetPayload_1(__float_as_uint(0.f));
+        optixSetPayload_2(__float_as_uint(0.f));
+        optixSetPayload_3(__float_as_uint(0.f));
+        optixSetPayload_4(__float_as_uint(0.f));
+        optixSetPayload_5(__float_as_uint(0.f));
+        optixSetPayload_6(__float_as_uint(0.f));
+        optixSetPayload_7(__float_as_uint(0.f));
+        optixSetPayload_8(__float_as_uint(0.f));
+        return;
+    }
+
+    // 将不透明度映射到透射度（适用于半透明贴图，和 PBR 的 transmission 叠加）
+    matTransmission = fminf(1.f, matTransmission + (1.f - alpha));
     
     // Encode material type and parameters to payload
     // p0=t, p1-3=normal, p4=materialType (as uint), p5-7=baseColor/albedo
